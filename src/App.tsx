@@ -11,6 +11,7 @@ import { useNotifications } from './hooks/useNotifications';
 import { PrecisionInput } from './components/UI/PrecisionInput';
 import { ThemeProvider, useTheme } from './hooks/useTheme';
 import { useSceneState } from './hooks/useSceneState';
+import type { SceneObject } from './types/scene';
 import './App.css';
 
 function AppContent() {
@@ -252,7 +253,7 @@ function AppContent() {
             <PrecisionInput
               selectedObjects={selectedObjects}
               onUpdateObjects={(updates) => {
-                selectedObjects.forEach(obj => {
+                selectedObjects.forEach((obj: SceneObject) => {
                   updateObject(obj.id, updates);
                 });
               }}

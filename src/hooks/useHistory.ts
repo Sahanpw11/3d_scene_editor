@@ -1,107 +1,80 @@
-import { useState, useCallback, useRef } from 'react';
-import type { HistoryAction, HistoryState } from '../types/scene';
+import { useState, useCallback } from 'react';
 
-export const useHistory = (maxHistory: number = 50) => {
-  const [history, setHistory] = useState<HistoryState>({
-    actions: [],
-    currentIndex: -1,
-    maxHistory,
-  });
+export interface HistorySnapshot {
+  id: string;
+  description: string;
+  timestamp: number;
+  data: any;
+}
 
-  // Use refs to avoid stale closures
-  const historyRef = useRef(history);
-  historyRef.current = history;
+export const useHistory = <T>(maxHistory: number = 50) => {
+  const [snapshots, setSnapshots] = useState<HistorySnapshot[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(-1);
 
-  const addAction = useCallback((action: Omit<HistoryAction, 'id' | 'timestamp'>) => {
-    const newAction: HistoryAction = {
-      ...action,
+  const addSnapshot = useCallback((description: string, data: T) => {
+    const snapshot: HistorySnapshot = {
       id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      description,
       timestamp: Date.now(),
+      data: JSON.parse(JSON.stringify(data)) // Deep clone to prevent mutations
     };
 
-    setHistory(prev => {
-      // Remove any actions after current index (when adding new action after undo)
-      const actionsToKeep = prev.actions.slice(0, prev.currentIndex + 1);
+    setSnapshots(prev => {
+      // Remove any snapshots after current index (when adding new snapshot after undo)
+      const snapshotsToKeep = prev.slice(0, currentIndex + 1);
       
-      // Add new action
-      const newActions = [...actionsToKeep, newAction];
+      // Add new snapshot
+      const newSnapshots = [...snapshotsToKeep, snapshot];
       
       // Limit history size
-      if (newActions.length > maxHistory) {
-        newActions.shift();
+      if (newSnapshots.length > maxHistory) {
+        newSnapshots.shift();
+        return newSnapshots;
       }
       
-      return {
-        ...prev,
-        actions: newActions,
-        currentIndex: newActions.length - 1,
-      };
+      return newSnapshots;
     });
-  }, [maxHistory]);
 
-  const undo = useCallback(() => {
-    const currentHistory = historyRef.current;
-    if (currentHistory.currentIndex >= 0) {
-      const action = currentHistory.actions[currentHistory.currentIndex];
-      try {
-        action.undo();
-        setHistory(prev => ({
-          ...prev,
-          currentIndex: prev.currentIndex - 1,
-        }));
-        return true;
-      } catch (error) {
-        console.error('Undo failed:', error);
-        return false;
-      }
+    setCurrentIndex(prev => {
+      const newIndex = prev + 1;
+      return newIndex >= maxHistory ? maxHistory - 1 : newIndex;
+    });
+  }, [currentIndex, maxHistory]);
+
+  const undo = useCallback((): T | null => {
+    if (currentIndex > 0) {
+      const previousSnapshot = snapshots[currentIndex - 1];
+      setCurrentIndex(currentIndex - 1);
+      return previousSnapshot.data;
     }
-    return false;
-  }, []);
+    return null;
+  }, [currentIndex, snapshots]);
 
-  const redo = useCallback(() => {
-    const currentHistory = historyRef.current;
-    if (currentHistory.currentIndex < currentHistory.actions.length - 1) {
-      const nextIndex = currentHistory.currentIndex + 1;
-      const action = currentHistory.actions[nextIndex];
-      try {
-        action.redo();
-        setHistory(prev => ({
-          ...prev,
-          currentIndex: nextIndex,
-        }));
-        return true;
-      } catch (error) {
-        console.error('Redo failed:', error);
-        return false;
-      }
+  const redo = useCallback((): T | null => {
+    if (currentIndex < snapshots.length - 1) {
+      const nextSnapshot = snapshots[currentIndex + 1];
+      setCurrentIndex(currentIndex + 1);
+      return nextSnapshot.data;
     }
-    return false;
-  }, []);
+    return null;
+  }, [currentIndex, snapshots]);
 
-  const canUndo = history.currentIndex >= 0;
-  const canRedo = history.currentIndex < history.actions.length - 1;
+  const canUndo = currentIndex > 0;
+  const canRedo = currentIndex < snapshots.length - 1;
 
   const clearHistory = useCallback(() => {
-    setHistory({
-      actions: [],
-      currentIndex: -1,
-      maxHistory,
-    });
-  }, [maxHistory]);
-
-  const getLastAction = useCallback(() => {
-    return history.currentIndex >= 0 ? history.actions[history.currentIndex] : null;
-  }, [history]);
+    setSnapshots([]);
+    setCurrentIndex(-1);
+  }, []);
 
   return {
-    addAction,
+    addSnapshot,
     undo,
     redo,
     canUndo,
     canRedo,
     clearHistory,
-    getLastAction,
-    history: history.actions,
-    currentIndex: history.currentIndex,
+    snapshots,
+    currentIndex,
   };
 };

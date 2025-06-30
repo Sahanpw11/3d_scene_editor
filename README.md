@@ -2,6 +2,8 @@
 
 A modern, interactive 3D scene editor built with React Three Fiber and TypeScript. Create, manipulate, and design 3D scenes with an intuitive interface.
 
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FSahanpw11%2F3d_scene_editor&project-name=3d-scene-editor&repository-name=3d_scene_editor)
+
 ## Features
 
 ### 🎯 Core Functionality

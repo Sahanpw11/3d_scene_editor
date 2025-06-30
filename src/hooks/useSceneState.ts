@@ -1,8 +1,14 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback } from 'react';
 import type { SceneObject, ObjectType, SceneSettings } from '../types/scene';
 import { createSceneObject, snapPosition } from '../types/scene';
 import { exportSceneToJSON, downloadScene, loadSceneFromFile } from '../utils/sceneSerializer';
-import { useHistory } from './useHistory';
+
+interface HistorySnapshot {
+  objects: SceneObject[];
+  selectedObjectIds: string[];
+  timestamp: number;
+  description: string;
+}
 
 export const useSceneState = () => {
   const [objects, setObjects] = useState<SceneObject[]>([]);
@@ -10,190 +16,173 @@ export const useSceneState = () => {
   const [transformMode, setTransformMode] = useState<'translate' | 'rotate' | 'scale'>('translate');
   const [settings, setSettings] = useState<SceneSettings>({
     gridSnap: false,
-    snapSize: 0.5,
+    snapSize: 1,
     showGrid: true,
     showShadows: true,
   });
 
-  const { addAction, undo, redo, canUndo, canRedo } = useHistory();
+  // History system with snapshots
+  const [history, setHistory] = useState<HistorySnapshot[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
 
-  // Use refs to avoid stale closure issues
-  const objectsRef = useRef(objects);
-  const selectedObjectIdsRef = useRef(selectedObjectIds);
+  // Helper to create a snapshot
+  const createSnapshot = useCallback((description: string): HistorySnapshot => ({
+    objects: [...objects],
+    selectedObjectIds: [...selectedObjectIds],
+    timestamp: Date.now(),
+    description,
+  }), [objects, selectedObjectIds]);
 
-  // Keep refs in sync
-  objectsRef.current = objects;
-  selectedObjectIdsRef.current = selectedObjectIds;
+  // Helper to add a snapshot to history
+  const addToHistory = useCallback((description: string) => {
+    const snapshot = createSnapshot(description);
+    setHistory(prev => {
+      // Remove any future history if we're in the middle of the stack
+      const newHistory = prev.slice(0, historyIndex + 1);
+      newHistory.push(snapshot);
+      
+      // Limit history size to 50 entries
+      if (newHistory.length > 50) {
+        newHistory.shift();
+        return newHistory;
+      }
+      
+      return newHistory;
+    });
+    setHistoryIndex(prev => Math.min(prev + 1, 49));
+  }, [createSnapshot, historyIndex]);
+
+  // Helper to restore from snapshot
+  const restoreSnapshot = useCallback((snapshot: HistorySnapshot) => {
+    setObjects(snapshot.objects);
+    setSelectedObjectIds(snapshot.selectedObjectIds);
+  }, []);
+
+  // Undo function
+  const undo = useCallback((): boolean => {
+    if (historyIndex >= 0) {
+      const snapshot = history[historyIndex];
+      restoreSnapshot(snapshot);
+      setHistoryIndex(prev => prev - 1);
+      return true;
+    }
+    return false;
+  }, [history, historyIndex, restoreSnapshot]);
+
+  // Redo function
+  const redo = useCallback((): boolean => {
+    if (historyIndex < history.length - 1) {
+      const nextIndex = historyIndex + 1;
+      const snapshot = history[nextIndex];
+      restoreSnapshot(snapshot);
+      setHistoryIndex(nextIndex);
+      return true;
+    }
+    return false;
+  }, [history, historyIndex, restoreSnapshot]);
+
+  // Can undo/redo
+  const canUndo = historyIndex >= 0;
+  const canRedo = historyIndex < history.length - 1;
 
   // Helper to get selected objects
   const selectedObjects = objects.filter(obj => selectedObjectIds.includes(obj.id));
   const selectedObject = selectedObjects.length === 1 ? selectedObjects[0] : null;
-  const selectedObjectId = selectedObjectIds.length === 1 ? selectedObjectIds[0] : null;
 
   // Add object with history
   const addObject = useCallback((type: ObjectType) => {
+    // Save current state to history before making changes
+    addToHistory(`Add ${type}`);
+    
     const newObject = createSceneObject(
       type,
-      [Math.random() * 4 - 2, Math.random() * 2 + 1, Math.random() * 4 - 2] // Random position
+      [Math.random() * 4 - 2, Math.random() * 2 + 1, Math.random() * 4 - 2]
     );
 
-    // Apply changes immediately
     setObjects(prev => [...prev, newObject]);
     setSelectedObjectIds([newObject.id]);
-
-    // Add to history
-    addAction({
-      type: 'create',
-      description: `Create ${type}`,
-      data: { objectId: newObject.id, object: newObject },
-      undo: () => {
-        setObjects(prev => prev.filter(obj => obj.id !== newObject.id));
-        setSelectedObjectIds(prev => prev.filter(id => id !== newObject.id));
-      },
-      redo: () => {
-        setObjects(prev => [...prev, newObject]);
-        setSelectedObjectIds([newObject.id]);
-      },
-    });
-  }, [addAction]);
+  }, [addToHistory]);
 
   // Select objects (supports multi-selection)
   const selectObjects = useCallback((objectIds: string[]) => {
     setSelectedObjectIds(objectIds);
   }, []);
 
-  // Legacy single selection for compatibility
+  // Select single object (for compatibility)
   const selectObject = useCallback((objectId: string | null) => {
     setSelectedObjectIds(objectId ? [objectId] : []);
   }, []);
 
   // Update object with history
   const updateObject = useCallback((objectId: string, updates: Partial<SceneObject>) => {
+    const targetObject = objects.find(obj => obj.id === objectId);
+    if (!targetObject) return;
+
+    // Save current state to history before making changes
+    addToHistory(`Modify ${targetObject.name}`);
+
     // Apply grid snapping if enabled
     const finalUpdates = settings.gridSnap && updates.position
       ? { ...updates, position: snapPosition(updates.position, settings.snapSize) }
       : updates;
 
-    // Find the object first
-    const targetObject = objectsRef.current.find(obj => obj.id === objectId);
-    if (!targetObject) return;
-
-    const previousObjectState = { ...targetObject };
-    const newObjectState: SceneObject = Object.assign({}, previousObjectState, finalUpdates);
-    
-    // Apply changes immediately
     setObjects(prev => prev.map(obj => 
-      obj.id === objectId ? newObjectState : obj
+      obj.id === objectId ? { ...obj, ...finalUpdates } : obj
     ));
-
-    // Add to history
-    addAction({
-      type: 'modify',
-      description: `Modify ${previousObjectState.name}`,
-      data: { objectId, previousObjectState, newObjectState },
-      undo: () => {
-        setObjects(prev => prev.map(obj => 
-          obj.id === objectId ? previousObjectState : obj
-        ));
-      },
-      redo: () => {
-        setObjects(prev => prev.map(obj => 
-          obj.id === objectId ? newObjectState : obj
-        ));
-      },
-    });
-  }, [settings.gridSnap, settings.snapSize, addAction]);
+  }, [objects, settings.gridSnap, settings.snapSize, addToHistory]);
 
   // Update object material
   const updateObjectMaterial = useCallback((objectId: string, materialUpdates: Partial<SceneObject['material']>) => {
-    const currentObject = objects.find(obj => obj.id === objectId);
-    if (!currentObject) return;
+    const targetObject = objects.find(obj => obj.id === objectId);
+    if (!targetObject) return;
     
-    const updatedMaterial = { ...currentObject.material, ...materialUpdates };
+    const updatedMaterial = { ...targetObject.material, ...materialUpdates };
     updateObject(objectId, { material: updatedMaterial });
   }, [objects, updateObject]);
 
   // Delete objects with history
   const deleteObjects = useCallback((objectIds: string[]) => {
     if (objectIds.length === 0) return;
-    
-    // Capture objects that will be deleted
-    let objectsToDelete: SceneObject[] = [];
-    
-    // Apply changes immediately and capture deleted objects
-    setObjects(prev => {
-      objectsToDelete = prev.filter(obj => objectIds.includes(obj.id));
-      return prev.filter(obj => !objectIds.includes(obj.id));
-    });
-    
-    setSelectedObjectIds(prev => prev.filter(id => !objectIds.includes(id)));
 
-    // Add to history
-    addAction({
-      type: 'delete',
-      description: `Delete ${objectsToDelete.length} object(s)`,
-      data: { deletedObjects: objectsToDelete },
-      undo: () => {
-        setObjects(prev => [...prev, ...objectsToDelete]);
-        setSelectedObjectIds(objectIds);
-      },
-      redo: () => {
-        setObjects(prev => prev.filter(obj => !objectIds.includes(obj.id)));
-        setSelectedObjectIds(prev => prev.filter(id => !objectIds.includes(id)));
-      },
-    });
-  }, [addAction]);
+    // Save current state to history before making changes
+    addToHistory(`Delete ${objectIds.length} object(s)`);
+
+    setObjects(prev => prev.filter(obj => !objectIds.includes(obj.id)));
+    setSelectedObjectIds(prev => prev.filter(id => !objectIds.includes(id)));
+  }, [addToHistory]);
 
   // Delete selected objects
-  const deleteSelectedObjects = useCallback(() => {
+  const deleteSelectedObject = useCallback(() => {
     if (selectedObjectIds.length > 0) {
       deleteObjects(selectedObjectIds);
     }
   }, [selectedObjectIds, deleteObjects]);
 
-  // Legacy single delete for compatibility
-  const deleteSelectedObject = useCallback(() => {
-    deleteSelectedObjects();
-  }, [deleteSelectedObjects]);
+  // Delete single object
+  const deleteObject = useCallback((objectId: string) => {
+    deleteObjects([objectId]);
+  }, [deleteObjects]);
 
   // Duplicate objects
   const duplicateObjects = useCallback((objectIds: string[]) => {
     if (objectIds.length === 0) return;
-    
-    // Find objects to duplicate
-    let objectsToDuplicate: SceneObject[] = [];
-    let newObjects: SceneObject[] = [];
 
-    setObjects(prev => {
-      objectsToDuplicate = prev.filter(obj => objectIds.includes(obj.id));
-      newObjects = objectsToDuplicate.map(obj => ({
-        ...obj,
-        id: `${obj.type}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        name: `${obj.name}_copy`,
-        position: [obj.position[0] + 1, obj.position[1], obj.position[2]] as [number, number, number],
-      }));
-      return [...prev, ...newObjects];
-    });
-    
+    // Save current state to history before making changes
+    addToHistory(`Duplicate ${objectIds.length} object(s)`);
+
+    const objectsToDuplicate = objects.filter(obj => objectIds.includes(obj.id));
+    const newObjects = objectsToDuplicate.map(obj => ({
+      ...obj,
+      id: `${obj.type}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name: `${obj.name}_copy`,
+      position: [obj.position[0] + 1, obj.position[1], obj.position[2]] as [number, number, number],
+    }));
+
+    setObjects(prev => [...prev, ...newObjects]);
     setSelectedObjectIds(newObjects.map(obj => obj.id));
+  }, [objects, addToHistory]);
 
-    addAction({
-      type: 'create',
-      description: `Duplicate ${objectsToDuplicate.length} object(s)`,
-      data: { newObjects },
-      undo: () => {
-        const newObjectIds = newObjects.map(obj => obj.id);
-        setObjects(prev => prev.filter(obj => !newObjectIds.includes(obj.id)));
-        setSelectedObjectIds(objectIds); // restore original selection
-      },
-      redo: () => {
-        setObjects(prev => [...prev, ...newObjects]);
-        setSelectedObjectIds(newObjects.map(obj => obj.id));
-      },
-    });
-  }, [addAction]);
-
-  // Legacy single duplicate for compatibility
+  // Duplicate single object
   const duplicateObject = useCallback((objectId: string) => {
     duplicateObjects([objectId]);
   }, [duplicateObjects]);
@@ -204,71 +193,42 @@ export const useSceneState = () => {
   }, []);
 
   // Save scene
-  const saveScene = useCallback((sceneName?: string) => {
-    const sceneData = exportSceneToJSON(objects, sceneName);
-    downloadScene(sceneData);
+  const saveScene = useCallback(() => {
+    const sceneData = exportSceneToJSON(objects);
+    downloadScene(sceneData, 'scene.json');
   }, [objects]);
 
   // Load scene
   const loadScene = useCallback(async (file: File): Promise<boolean> => {
     try {
       const sceneData = await loadSceneFromFile(file);
-      if (sceneData) {
-        const previousObjects = [...objects];
-        const previousSelection = [...selectedObjectIds];
-        
-        setObjects(sceneData.objects);
-        setSelectedObjectIds([]);
-
-        addAction({
-          type: 'modify',
-          description: 'Load scene',
-          data: { sceneData },
-          undo: () => {
-            setObjects(previousObjects);
-            setSelectedObjectIds(previousSelection);
-          },
-          redo: () => {
-            setObjects(sceneData.objects);
-            setSelectedObjectIds([]);
-          },
-        });
-
-        return true;
+      
+      if (!sceneData) {
+        return false;
       }
+      
+      // Save current state to history before loading
+      addToHistory('Load scene');
+      
+      setObjects(sceneData.objects);
+      setSelectedObjectIds([]);
+      return true;
     } catch (error) {
       console.error('Failed to load scene:', error);
+      return false;
     }
-    return false;
-  }, [objects, selectedObjectIds, addAction]);
+  }, [addToHistory]);
 
   // Clear scene
   const clearScene = useCallback(() => {
-    const previousObjects = [...objects];
-    const previousSelection = [...selectedObjectIds];
-
-    setObjects([]);
-    setSelectedObjectIds([]);
-
-    addAction({
-      type: 'delete',
-      description: 'Clear scene',
-      data: { clearedObjects: previousObjects },
-      undo: () => {
-        setObjects(previousObjects);
-        setSelectedObjectIds(previousSelection);
-      },
-      redo: () => {
-        setObjects([]);
-        setSelectedObjectIds([]);
-      },
-    });
-  }, [objects, selectedObjectIds, addAction]);
-
-  // Legacy delete for compatibility
-  const deleteObject = useCallback((objectId: string) => {
-    deleteObjects([objectId]);
-  }, [deleteObjects]);
+    if (objects.length > 0) {
+      // Save current state to history before clearing
+      addToHistory('Clear scene');
+      
+      setObjects([]);
+      setSelectedObjectIds([]);
+    }
+  }, [objects.length, addToHistory]);
 
   return {
     // State
@@ -276,31 +236,27 @@ export const useSceneState = () => {
     selectedObjectIds,
     selectedObjects,
     selectedObject,
-    selectedObjectId, // For compatibility
     transformMode,
     settings,
-
+    
     // History
     canUndo,
     canRedo,
     undo,
     redo,
-
-    // Object operations
+    
+    // Actions
     addObject,
     selectObjects,
-    selectObject, // For compatibility
+    selectObject,
     updateObject,
     updateObjectMaterial,
+    deleteObject,
     deleteObjects,
-    deleteObject, // For compatibility
-    deleteSelectedObjects,
-    deleteSelectedObject, // For compatibility
+    deleteSelectedObject,
+    duplicateObject,
     duplicateObjects,
-    duplicateObject, // For compatibility
     setTransformMode,
-
-    // Scene operations
     updateSettings,
     saveScene,
     loadScene,
