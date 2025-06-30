@@ -1,0 +1,54 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Custom for Visual Studio
+*.cs     diff=csharp
+*.sln    merge=union
+*.csproj merge=union
+*.vbproj merge=union
+*.vcxproj merge=union
+*.vcproj merge=union
+*.dbproj merge=union
+*.fsproj merge=union
+*.lsproj merge=union
+*.wixproj merge=union
+*.modelproj merge=union
+*.sqlproj merge=union
+*.wwaproj merge=union
+
+# Standard to msysgit
+*.doc	 diff=astextplain
+*.DOC	 diff=astextplain
+*.docx diff=astextplain
+*.DOCX diff=astextplain
+*.dot  diff=astextplain
+*.DOT  diff=astextplain
+*.pdf  diff=astextplain
+*.PDF	 diff=astextplain
+*.rtf	 diff=astextplain
+*.RTF	 diff=astextplain
+
+# TypeScript and JavaScript
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.jsx text eol=lf
+*.json text eol=lf
+
+# CSS and HTML
+*.css text eol=lf
+*.html text eol=lf
+*.htm text eol=lf
+
+# Markdown
+*.md text eol=lf
+
+# Config files
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.ini text eol=lf
+
+# Lock files
+package-lock.json binary
+yarn.lock binary
